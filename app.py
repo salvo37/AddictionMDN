@@ -48,16 +48,15 @@ LABELS_CRA   = ['DU — Desire to use', 'IU — Intention to use',
 LABELS_SHORT = ['DU', 'IU', 'APE', 'AR', 'LC']
 COLORS = ['#2196F3', '#FF5722', '#4CAF50', '#9C27B0', '#FF9800']
 
-latent_centers  = np.array(params['latent_centers'])
-DELTA_T_MEAN    = params['DELTA_T_MEAN']
-DELTA_T_SD      = params['DELTA_T_SD']
-THETA           = params['THETA']
-K, N_OUT        = 3, 5
+latent_centers = np.array(params['latent_centers'])
+DELTA_T_MEAN   = params['DELTA_T_MEAN']
+DELTA_T_SD     = params['DELTA_T_SD']
+THETA          = params['THETA']
+K, N_OUT       = 3, 5
 
-# Parametri simulazione corretti — Δt coerente con training
-STEP_DAYS_SIM   = 32
-T_STEPS_SIM     = int(365 / STEP_DAYS_SIM)   # 11 assessment ~1 anno
-DELTA_T_SIM_Z   = (STEP_DAYS_SIM - DELTA_T_MEAN) / DELTA_T_SD
+STEP_DAYS_SIM  = 32
+T_STEPS_SIM    = int(365 / STEP_DAYS_SIM)
+DELTA_T_SIM_Z  = (STEP_DAYS_SIM - DELTA_T_MEAN) / DELTA_T_SD
 
 def clip_z(x): return np.clip(x, -3.5, 3.5)
 def nearest_center(x): return int(np.argmin(np.sum((latent_centers - x)**2, axis=1)))
@@ -67,25 +66,21 @@ def mdn_sample(x_input):
     k = np.random.choice(K, p=pi)
     return np.random.normal(mu[k], sigma[k])
 
-def simulate(craving_z, n_seeds=10):
-    all_traj, all_states = [], []
-    for _ in range(n_seeds):
-        Z = np.full((T_STEPS_SIM + 1, N_OUT), np.nan)
-        S = np.zeros(T_STEPS_SIM + 1, dtype=int)
-        Z[0] = craving_z
-        lat = numpy_encoder(np.append(craving_z, DELTA_T_SIM_Z))
-        S[0] = nearest_center(lat)
-        for t in range(1, T_STEPS_SIM + 1):
-            xn = clip_z(mdn_sample(np.append(Z[t-1], DELTA_T_SIM_Z)))
-            Z[t] = xn
-            S[t] = nearest_center(numpy_encoder(np.append(xn, DELTA_T_SIM_Z)))
-        all_traj.append(Z)
-        all_states.append(S)
-    return np.array(all_traj), all_states[0]
+def simulate(craving_z):
+    Z = np.full((T_STEPS_SIM + 1, N_OUT), np.nan)
+    S = np.zeros(T_STEPS_SIM + 1, dtype=int)
+    Z[0] = craving_z
+    lat = numpy_encoder(np.append(craving_z, DELTA_T_SIM_Z))
+    S[0] = nearest_center(lat)
+    for t in range(1, T_STEPS_SIM + 1):
+        xn = clip_z(mdn_sample(np.append(Z[t-1], DELTA_T_SIM_Z)))
+        Z[t] = xn
+        S[t] = nearest_center(numpy_encoder(np.append(xn, DELTA_T_SIM_Z)))
+    return Z, S
 
 # ============================================================
 st.title("🧠 Craving Trajectory Simulator")
-st.markdown("*MDN v10 — Autoregressive simulation over ~1 year (11 assessments, Δt ≈ 32 days)*")
+st.markdown("*MDN v10 — Single agent simulation over ~1 year (Δt ≈ 32 days)*")
 st.markdown("---")
 
 col_left, col_right = st.columns([1, 2.5])
@@ -96,8 +91,7 @@ with col_left:
                 for i, lab in enumerate(LABELS_CRA)]
 
     st.subheader("🔧 Settings")
-    n_seeds = st.slider("Trajectories (uncertainty band)", 1, 30, 10)
-    seed    = st.number_input("Random seed", value=42, step=1)
+    seed = st.number_input("Random seed", value=42, step=1)
     np.random.seed(int(seed))
 
     comp_base = float(np.mean(cra_vals))
@@ -109,31 +103,29 @@ with col_left:
         f"padding:12px;border-radius:8px;font-size:20px'><b>{comp_base:+.2f}</b></div>",
         unsafe_allow_html=True
     )
-    st.markdown(f"<div style='text-align:center;color:gray;font-size:11px;margin-top:4px'>"
-                f"Each step ≈ 32 days | {T_STEPS_SIM} assessments over ~1 year</div>",
-                unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='text-align:center;color:gray;font-size:11px;margin-top:4px'>"
+        f"Each step ≈ 32 days | {T_STEPS_SIM} assessments over ~1 year</div>",
+        unsafe_allow_html=True
+    )
 
 with col_right:
     craving_z = np.array(cra_vals, dtype=np.float64)
 
     with st.spinner("Simulating..."):
-        all_traj, states = simulate(craving_z, n_seeds=n_seeds)
+        Z, states = simulate(craving_z)
 
     assessments = np.arange(T_STEPS_SIM + 1)
-    mean_traj   = all_traj.mean(axis=0)
-    comp_traj   = mean_traj.mean(axis=1)
+    comp_traj   = Z.mean(axis=1)
+    month_labels = [f'M{int(t*32/30)}' for t in assessments]
 
     fig, axes = plt.subplots(2, 1, figsize=(11, 8),
                              gridspec_kw={'height_ratios': [3.5, 1]})
     ax = axes[0]
 
     for i in range(N_OUT):
-        dm = all_traj[:,:,i].mean(axis=0)
-        ds = all_traj[:,:,i].std(axis=0)
-        ax.plot(assessments, dm, color=COLORS[i], lw=1.8,
+        ax.plot(assessments, Z[:, i], color=COLORS[i], lw=1.8,
                 label=LABELS_SHORT[i], alpha=0.9)
-        ax.fill_between(assessments, dm-ds, dm+ds,
-                        color=COLORS[i], alpha=0.12)
 
     ax.plot(assessments, comp_traj, color='black', lw=2.5,
             linestyle='--', label='Composite', zorder=5)
@@ -150,12 +142,9 @@ with col_right:
     )
     ax.legend(loc='upper right', fontsize=9, ncol=3)
     ax.grid(True, alpha=0.15)
-    # Asse X con label mesi approssimativi
-    month_labels = [f'M{int(t*32/30)}' for t in assessments]
     ax.set_xticks(assessments)
     ax.set_xticklabels(month_labels, fontsize=8)
 
-    # Latent states
     ax2 = axes[1]
     sc = {0: '#4CAF50', 1: '#FF9800', 2: '#FF5722'}
     sl = {0: 'S0 — low craving', 1: 'S1 — intermediate', 2: 'S2 — high craving'}
@@ -178,7 +167,7 @@ with col_right:
     st.markdown("---")
     m1, m2, m3, m4 = st.columns(4)
     n_above  = int((comp_traj > THETA).sum())
-    peak_dim = LABELS_SHORT[int(mean_traj.mean(axis=0).argmax())]
+    peak_dim = LABELS_SHORT[int(Z.mean(axis=0).argmax())]
     m1.metric("Composite mean (~1y)", f"{comp_traj.mean():+.2f}")
     m2.metric("Composite SD",          f"{comp_traj.std():.2f}")
     m3.metric(f"Assessments above θ={THETA}", str(n_above))
